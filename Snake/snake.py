@@ -40,40 +40,59 @@ class GridGame:
     def startGame(self):
         print("Game started!")
         self.print_grid()
+        return {
+            "current_position": {"x": self.current_x, "y": self.current_y},
+            "goal_position": {"x": self.goal_x, "y": self.goal_y},
+            "grid_size": self.grid_size
+        }
     
-    def moveLeft(self):
-        if self.current_x > 0:
-            self.current_x -= 1
+    def move(self, direction):
+        """Move in the specified direction: U (up), D (down), L (left), or R (right)."""
+        direction = direction.upper()  # Convert to uppercase for consistency
+        
+        # Calculate the new position based on the direction
+        new_x, new_y = self.current_x, self.current_y
+        movement = ""
+        
+        if direction == "U":
+            new_y -= 1
+            movement = "up"
+        elif direction == "D":
+            new_y += 1
+            movement = "down"
+        elif direction == "L":
+            new_x -= 1
+            movement = "left"
+        elif direction == "R":
+            new_x += 1
+            movement = "right"
         else:
-            print("Out of bounds move!")
-        self.print_grid()
-        self.check_win()
-    
-    def moveRight(self):
-        if self.current_x < self.grid_size - 1:
-            self.current_x += 1
+            print(f"Invalid direction: {direction}. Use U, D, L, or R.")
+            return {
+                "success": False,
+                "message": f"Invalid direction: {direction}. Use U, D, L, or R.",
+                "current_position": {"x": self.current_x, "y": self.current_y},
+                "win": False
+            }
+        
+        # Check if the move is valid (within grid boundaries)
+        if 0 <= new_x < self.grid_size and 0 <= new_y < self.grid_size:
+            self.current_x, self.current_y = new_x, new_y
+            print(f"Moved {movement} to position ({new_x}, {new_y})")
+            self.print_grid()
+            win = self.check_win()
+            
+            return {
+                "success": True,
+                "message": f"Moved {movement} to ({new_x}, {new_y})",
+                "current_position": {"x": self.current_x, "y": self.current_y},
+                "win": win
+            }
         else:
-            print("Out of bounds move!")
-        self.print_grid()
-        self.check_win()
-    
-    def moveUp(self):
-        if self.current_y > 0:
-            self.current_y -= 1
-        else:
-            print("Out of bounds move!")
-        self.print_grid()
-        self.check_win()
-    
-    def moveDown(self):
-        if self.current_y < self.grid_size - 1:
-            self.current_y += 1
-        else:
-            print("Out of bounds move!")
-        self.print_grid()
-        self.check_win()
-
-# Start the game and keep variable accessible
-game = GridGame(grid_size=3)
-game.startGame()
-print("Game is ready! Use game.moveLeft(), game.moveRight(), game.moveUp(), or game.moveDown() to play.")
+            print(f"Invalid move: out of bounds")
+            return {
+                "success": False,
+                "message": "Invalid move: out of bounds",
+                "current_position": {"x": self.current_x, "y": self.current_y},
+                "win": False
+            }
