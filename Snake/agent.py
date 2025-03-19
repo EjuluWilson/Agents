@@ -6,6 +6,9 @@ from typing import TypedDict, List, Union, Dict, Literal
 import snake
 import os
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 1. Define the state
 class AgentState(TypedDict):
@@ -16,21 +19,20 @@ class AgentState(TypedDict):
     game_status: Literal["on", "done"]
     tool_calls: List[Dict]
 
-# 2. Define the tool schemas with coordinate parameters
-class MoveToInput(BaseModel):
-    x: int = Field(..., description="The x-coordinate to move to")
-    y: int = Field(..., description="The y-coordinate to move to")
+# 2. Define the tool schema with direction parameter
+class MoveInput(BaseModel):
+    direction: str = Field(..., description="The direction to move: U (up), D (down), L (left), or R (right)")
 
-# Define the moveTo tool as a schema object for the LLM
-move_to_tool = StructuredTool.from_function(
-    name="move_to",
-    description="Move the player to the specified coordinates (x, y)",
-    func=lambda x, y: f"Move to position ({x}, {y})",
-    args_schema=MoveToInput
+# Define the move tool as a schema object for the LLM
+move_tool = StructuredTool.from_function(
+    name="move",
+    description="Move the player in the specified direction: U (up), D (down), L (left), or R (right)",
+    func=lambda direction: f"Move in direction {direction}",
+    args_schema=MoveInput
 )
 
 # List of tools to expose to the LLM
-tools = [move_to_tool]
+tools = [move_tool]
 
 # 3. Initialize LLM with tool calling capability
 llm = ChatOpenAI(
@@ -65,7 +67,7 @@ def initialize_game_node(state: AgentState) -> AgentState:
 
 # Function to decide on the next move
 def decide_move_node(state: AgentState) -> AgentState:
-    """Use the LLM to decide on the next move by specifying coordinates."""
+    """Use the LLM to decide on the next move by specifying a direction."""
     # Get the position information from the state
     current_pos = state["current_position"]
     goal_pos = state["goal_position"]
@@ -79,18 +81,18 @@ def decide_move_node(state: AgentState) -> AgentState:
     You are playing a grid-based game. {context}
     
     Your goal is to reach the target position.
-    You can only move to adjacent cells (one step at a time, horizontally or vertically).
+    You can move one step at a time in four directions.
     
     Available tool:
-    - move_to(x: int, y: int): Move the player to the specified coordinates
+    - move(direction: str): Move the player in the specified direction (U, D, L, R)
+      where: U = up, D = down, L = left, R = right
     
     Choose the best move to get closer to the goal. Remember:
-    1. You can only move one step at a time to an adjacent cell
-    2. Valid moves are to cells that share an edge with your current position
-    3. You cannot move diagonally
-    4. You cannot move outside the grid boundaries (0 to {grid_size - 1})
+    1. You can only move one step at a time
+    2. You cannot move outside the grid boundaries (0 to {grid_size - 1})
+    3. Coordinate system: top-left is (0,0), x increases moving right, y increases moving down
     
-    Determine the coordinates you want to move to and call the move_to tool.
+    Determine the direction you want to move and call the move tool.
     IMPORTANT: Only generate tool calls. Don't try to execute them directly.
     """
     
@@ -122,12 +124,11 @@ def execute_tools_node(state: AgentState) -> AgentState:
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
         
-        if tool_name == "move_to" and "x" in tool_args and "y" in tool_args:
-            x = tool_args["x"]
-            y = tool_args["y"]
+        if tool_name == "move" and "direction" in tool_args:
+            direction = tool_args["direction"]
             
-            # Execute the moveTo command
-            result = game_instance.moveTo(x, y)
+            # Execute the move command
+            result = game_instance.move(direction)
             
             # Update the state with the new position
             state["current_position"] = result["current_position"]
@@ -146,7 +147,7 @@ def execute_tools_node(state: AgentState) -> AgentState:
             # Add the result to the messages
             state["messages"].append(AIMessage(content=message))
         else:
-            error_message = f"Invalid tool call: {tool_name} or missing coordinates"
+            error_message = f"Invalid tool call: {tool_name} or missing direction"
             state["messages"].append(AIMessage(content=error_message))
     
     # Clear the tool calls for the next iteration
@@ -211,7 +212,8 @@ def run_agent():
             # If there are tool calls, print them
             if hasattr(latest_message, "tool_calls") and latest_message.tool_calls:
                 for tool_call in latest_message.tool_calls:
-                    print(f"Tool call: {tool_call['name']}({tool_call['args']})")
+                    args_str = ', '.join([f"{k}={v}" for k, v in tool_call['args'].items()])
+                    print(f"Tool call: {tool_call['name']}({args_str})")
 
 if __name__ == "__main__":
     run_agent()
