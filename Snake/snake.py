@@ -17,17 +17,25 @@ class GridGame:
         self.current_y = self.start_y
     
     def print_grid(self):
+        print("----"*self.grid_size)
         for y in range(self.grid_size):
-            row = ""
+            row = "|"
             for x in range(self.grid_size):
                 if x == self.goal_x and y == self.goal_y:
-                    row += " G "
+                    row += " G |"
                 elif x == self.current_x and y == self.current_y:
-                    row += " X "
+                    row += " X |"
                 else:
-                    row += " . "
+                    row += " . |"
             print(row)
+            print("----"*self.grid_size)
         print("\n")
+    
+    def check_win(self):
+        if self.current_x == self.goal_x and self.current_y == self.goal_y:
+            print("Congratulations! You reached the goal!")
+            return True
+        return False
     
     def startGame(self):
         print("Game started!")
@@ -39,6 +47,7 @@ class GridGame:
         else:
             print("Out of bounds move!")
         self.print_grid()
+        self.check_win()
     
     def moveRight(self):
         if self.current_x < self.grid_size - 1:
@@ -46,6 +55,7 @@ class GridGame:
         else:
             print("Out of bounds move!")
         self.print_grid()
+        self.check_win()
     
     def moveUp(self):
         if self.current_y > 0:
@@ -53,6 +63,7 @@ class GridGame:
         else:
             print("Out of bounds move!")
         self.print_grid()
+        self.check_win()
     
     def moveDown(self):
         if self.current_y < self.grid_size - 1:
@@ -60,10 +71,9 @@ class GridGame:
         else:
             print("Out of bounds move!")
         self.print_grid()
+        self.check_win()
 
-# Example usage
-game = GridGame(grid_size=5)  # Change the grid size here
+# Start the game and keep variable accessible
+game = GridGame(grid_size=3)
 game.startGame()
-game.moveRight()
-game.moveDown()
-game.moveLeft()
+print("Game is ready! Use game.moveLeft(), game.moveRight(), game.moveUp(), or game.moveDown() to play.")
