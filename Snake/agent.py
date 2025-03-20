@@ -207,7 +207,7 @@ def run_interactive():
     print("Type 'n' to make a move, or 'exit' to quit")
     
     while True:
-        command = input("🐍 ").strip().lower()
+        command = input("🤖→").strip().lower()
         
         if command == "exit()":
             break
@@ -215,7 +215,7 @@ def run_interactive():
             state = handle_game_event(state)
             # Check if game is over
             if state["game_status"] == "done":
-                print("Game complete! Type 'next' to start a new game or 'exit' to quit")
+                print("\nGame complete! Type 'n' to start a new game or 'exit' to quit")
                 # Reset state to start new game
                 state = None
         else:
