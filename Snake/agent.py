@@ -1,185 +1,47 @@
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langchain_core.tools import StructuredTool
-from langgraph.graph import StateGraph, END
+from langchain_core.tools import tool
+from langgraph.graph import StateGraph, END  # Add END here
 from typing import TypedDict, List, Union, Dict, Literal
 import snake
-import os
-from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+import os
 
-load_dotenv()
+# Load environment variables
+load_dotenv(dotenv_path="../.env")
 
-# 1. Define the state
+# Define the state
 class AgentState(TypedDict):
-    messages: List[Union[HumanMessage, AIMessage]]
+    messages: List[Union[HumanMessage, AIMessage, ToolMessage]]
     current_position: Dict[str, int]
     goal_position: Dict[str, int]
     grid_size: int
     game_status: Literal["on", "done"]
-    tool_calls: List[Dict]
+    is_initialized: bool
 
-# 2. Define the tool schema with direction parameter
-class MoveInput(BaseModel):
-    direction: str = Field(..., description="The direction to move: U (up), D (down), L (left), or R (right)")
+# Define the tool
+@tool
+def move(direction: str) -> str:
+    """Move the player in the specified direction: U (up), D (down), L (left), or R (right)"""
+    return f"Move in direction {direction}"
 
-# Define the move tool as a schema object for the LLM
-move_tool = StructuredTool.from_function(
-    name="move",
-    description="Move the player in the specified direction: U (up), D (down), L (left), or R (right)",
-    func=lambda direction: f"Move in direction {direction}",
-    args_schema=MoveInput
-)
-
-# List of tools to expose to the LLM
-tools = [move_tool]
-
-# 3. Initialize LLM with tool calling capability
-llm = ChatOpenAI(
-    model="gpt-4-turbo",
-    temperature=0,
-    api_key=os.environ.get("OPENAI_API_KEY")
-)
-
-# The actual game instance will be created in the execution node
-game_instance = None
-
-# Function to create the game state
-def initialize_game_node(state: AgentState) -> AgentState:
-    """Initialize the game and update the state."""
-    global game_instance
-    
-    # Create a new game instance
-    game_instance = snake.GridGame()
-    game_info = game_instance.startGame()
-    
-    # Update the state with the game info
-    state["current_position"] = game_info["current_position"]
-    state["goal_position"] = game_info["goal_position"]
-    state["grid_size"] = game_info["grid_size"]
-    state["game_status"] = "on"
-    
-    # Add a message about the game state to the messages
-    initial_message = f"Game initialized. Player at position ({state['current_position']['x']}, {state['current_position']['y']}). Goal at ({state['goal_position']['x']}, {state['goal_position']['y']})."
-    state["messages"].append(AIMessage(content=initial_message))
-    
-    return state
-
-# Function to decide on the next move
-def decide_move_node(state: AgentState) -> AgentState:
-    """Use the LLM to decide on the next move by specifying a direction."""
-    # Get the position information from the state
-    current_pos = state["current_position"]
-    goal_pos = state["goal_position"]
-    grid_size = state["grid_size"]
-    
-    # Prepare context for the LLM
-    context = f"Current position: ({current_pos['x']}, {current_pos['y']}). Goal position: ({goal_pos['x']}, {goal_pos['y']}). Grid size: {grid_size}x{grid_size}."
-    
-    # Create a prompt for the LLM
-    prompt = f"""
-    You are playing a grid-based game. {context}
-    
-    Your goal is to reach the target position.
-    You can move one step at a time in four directions.
-    
-    Available tool:
-    - move(direction: str): Move the player in the specified direction (U, D, L, R)
-      where: U = up, D = down, L = left, R = right
-    
-    Choose the best move to get closer to the goal. Remember:
-    1. You can only move one step at a time
-    2. You cannot move outside the grid boundaries (0 to {grid_size - 1})
-    3. Coordinate system: top-left is (0,0), x increases moving right, y increases moving down
-    
-    Determine the direction you want to move and call the move tool.
-    IMPORTANT: Only generate tool calls. Don't try to execute them directly.
-    """
-    
-    # Add the prompt to the messages
-    state["messages"].append(HumanMessage(content=prompt))
-    
-    # Get the LLM's response
-    response = llm.bind_tools(tools).invoke(state["messages"])
-    
-    # Add the response to the messages
-    state["messages"].append(response)
-    
-    # Extract the tool calls from the response
-    state["tool_calls"] = response.tool_calls if hasattr(response, "tool_calls") else []
-    
-    return state
-
-# Function to execute the tool calls
-def execute_tools_node(state: AgentState) -> AgentState:
-    """Execute the tool calls made by the LLM."""
-    global game_instance
-    
-    # Get the tool calls
-    tool_calls = state["tool_calls"]
-    
-    # Execute each tool call
-    for tool_call in tool_calls:
-        # Get the tool name and arguments
-        tool_name = tool_call["name"]
-        tool_args = tool_call.get("args", {})
-        
-        if tool_name == "move" and "direction" in tool_args:
-            direction = tool_args["direction"]
-            
-            # Execute the move command
-            result = game_instance.move(direction)
-            
-            # Update the state with the new position
-            state["current_position"] = result["current_position"]
-            
-            # Check if the move was successful
-            if result["success"]:
-                message = f"{result['message']}"
-                
-                # Check if the game is won
-                if result["win"]:
-                    message += " You reached the goal!"
-                    state["game_status"] = "done"
-            else:
-                message = f"Invalid move: {result['message']}"
-                
-            # Add the result to the messages
-            state["messages"].append(AIMessage(content=message))
-        else:
-            error_message = f"Invalid tool call: {tool_name} or missing direction"
-            state["messages"].append(AIMessage(content=error_message))
-    
-    # Clear the tool calls for the next iteration
-    state["tool_calls"] = []
-    
-    return state
-
-# Function to decide whether to continue or end
-def should_continue(state: AgentState) -> Union[Literal["decide_move"], Literal["END"]]:
-    """Decide whether to continue the game or end it."""
-    if state["game_status"] == "done":
-        return END
-    else:
-        return "decide_move"
-
-# Build the graph
-def build_agent():
-    # Create a new graph
+# Create the agent graph
+def create_agent_graph():
+    # Initialize the graph
     workflow = StateGraph(AgentState)
     
-    # Add the nodes
+    # Add nodes
     workflow.add_node("initialize_game", initialize_game_node)
-    workflow.add_node("decide_move", decide_move_node)
-    workflow.add_node("execute_tools", execute_tools_node)
+    workflow.add_node("process_move", process_move_node)
     
-    # Add the edges
-    workflow.add_edge("initialize_game", "decide_move")
-    workflow.add_edge("decide_move", "execute_tools")
+    # Add conditional edges based on initialization status
     workflow.add_conditional_edges(
-        "execute_tools",
-        should_continue
+        "initialize_game",
+        lambda state: "process_move" if state["is_initialized"] else "initialize_game"
     )
+    
+    # Make process_move always go to END
+    workflow.add_edge("process_move", END)
     
     # Set the entry point
     workflow.set_entry_point("initialize_game")
@@ -187,33 +49,177 @@ def build_agent():
     # Compile the graph
     return workflow.compile()
 
-# Run the agent
-def run_agent():
-    # Build the agent
-    agent = build_agent()
+# Global game instance
+game_instance = None
+
+# Initialize game node
+def initialize_game_node(state: AgentState) -> AgentState:
+    global game_instance
     
-    # Initialize the state
-    initial_state = {
-        "messages": [],
-        "current_position": {"x": 0, "y": 0},  # These will be overwritten in initialize_game_node
-        "goal_position": {"x": 0, "y": 0},     # These will be overwritten in initialize_game_node
-        "grid_size": 3,                        # This will be overwritten in initialize_game_node
-        "game_status": "on",
-        "tool_calls": []
-    }
+    # Only initialize if not already initialized
+    if not state["is_initialized"]:
+        game_instance = snake.GridGame()
+        game_info = game_instance.startGame()
+        
+        state["current_position"] = game_info["current_position"]
+        state["goal_position"] = game_info["goal_position"]
+        state["grid_size"] = game_info["grid_size"]
+        state["is_initialized"] = True
+        
+        state["messages"].append(AIMessage(content=f"Game initialized. Player at ({state['current_position']['x']}, {state['current_position']['y']}). Goal at ({state['goal_position']['x']}, {state['goal_position']['y']})."))
     
-    # Run the agent
-    for state in agent.stream(initial_state):
-        # Print the latest message
-        if state.get("messages") and len(state["messages"]) > 0:
-            latest_message = state["messages"][-1]
-            print(f"{latest_message.type}: {latest_message.content}")
+    return state
+
+# Process move node (combines LLM decision and execution)
+def process_move_node(state: AgentState) -> AgentState:
+    global game_instance
+    
+    # Skip if game is done
+    if state["game_status"] == "done":
+        return state
+    
+    # Get LLM to decide the move
+    llm = ChatOpenAI(
+        model="gpt-4-turbo",
+        temperature=0,
+        api_key=os.environ.get("OPENAI_API_KEY")
+    )
+    
+    # Prepare context for the LLM
+    context = f"Current position: ({state['current_position']['x']}, {state['current_position']['y']}). Goal position: ({state['goal_position']['x']}, {state['goal_position']['y']}). Grid size: {state['grid_size']}x{state['grid_size']}."
+    
+    # Create a prompt for the LLM
+    
+    # Update this part in the process_move_node function
+    prompt = f"""
+    You are playing a grid-based game. {context}
+
+    Your goal is to reach the target position.
+    You can move one step at a time in four directions:
+    - U (up): Decreases the y-coordinate by 1
+    - D (down): Increases the y-coordinate by 1
+    - L (left): Decreases the x-coordinate by 1
+    - R (right): Increases the x-coordinate by 1
+
+    Coordinate system: (0,0) is at the top-left, x increases moving right, y increases moving down.
+
+    Available tool:
+    - move(direction: str): Move the player in the specified direction (U, D, L, R)
+
+    Analyze the current position and goal position carefully.
+    Choose the best move to get closer to the goal by comparing x and y coordinates separately.
+    Consider BOTH horizontal AND vertical movement to find the shortest path.
+    """
+   
+    # Add the prompt to the messages
+    state["messages"].append(HumanMessage(content=prompt))
+    
+    # Get the LLM's response
+    response = llm.bind_tools([move]).invoke(state["messages"])
+    
+    # Add the response to the messages
+    state["messages"].append(response)
+    
+    # Extract the direction from the tool call
+    if hasattr(response, "tool_calls") and response.tool_calls:
+        for tool_call in response.tool_calls:
+            tool_call_id = tool_call["id"]
+            tool_name = tool_call["name"]
+            
+            if tool_name == "move" and "direction" in tool_call["args"]:
+                direction = tool_call["args"]["direction"]
+                
+                # Execute the move
+                result = game_instance.move(direction)
+                
+                # Update the state
+                state["current_position"] = result["current_position"]
+                
+                # Create a ToolMessage with the appropriate status
+                status = "success" if result["success"] else "error"
+                
+                # Add the tool message to the state
+                tool_message = ToolMessage(
+                    content=result["message"],
+                    tool_call_id=tool_call_id,
+                    name=tool_name,
+                    status=status
+                )
+                state["messages"].append(tool_message)
+                
+                # Check if game is won
+                if result["win"]:
+                    state["messages"].append(AIMessage(content="You reached the goal!"))
+                    state["game_status"] = "done"
+            else:
+                # Handle invalid tool call
+                error_message = f"Invalid tool call or missing direction"
+                tool_message = ToolMessage(
+                    content=error_message,
+                    tool_call_id=tool_call_id,
+                    name=tool_name,
+                    status="error"
+                )
+                state["messages"].append(tool_message)
+    
+    return state
+
+# Function to handle each event
+def handle_game_event(state=None):
+    """Run one complete step of the game."""
+    # Create the agent graph
+    agent = create_agent_graph()
+    
+    # Initialize state if needed
+    if state is None:
+        state = {
+            "messages": [],
+            "current_position": {"x": 0, "y": 0},
+            "goal_position": {"x": 0, "y": 0},
+            "grid_size": 3,
+            "game_status": "on",
+            "is_initialized": False
+        }
+    
+    # Run the graph once
+    result = agent.invoke(state)
+    
+    # Print the latest messages for this step
+    if len(result["messages"]) > len(state["messages"]):
+        for i in range(len(state["messages"]), len(result["messages"])):
+            msg = result["messages"][i]
+            print(f"{msg.type}: {msg.content}")
             
             # If there are tool calls, print them
-            if hasattr(latest_message, "tool_calls") and latest_message.tool_calls:
-                for tool_call in latest_message.tool_calls:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tool_call in msg.tool_calls:
                     args_str = ', '.join([f"{k}={v}" for k, v in tool_call['args'].items()])
                     print(f"Tool call: {tool_call['name']}({args_str})")
+    
+    # Return the updated state
+    return result
+
+# Interactive simulation
+def run_interactive():
+    """Run the agent interactively via terminal commands."""
+    state = None
+    print("Interactive Snake Game Agent")
+    print("Type 'n' to make a move, or 'exit' to quit")
+    
+    while True:
+        command = input("🐍 ").strip().lower()
+        
+        if command == "exit()":
+            break
+        elif command == "n":
+            state = handle_game_event(state)
+            # Check if game is over
+            if state["game_status"] == "done":
+                print("Game complete! Type 'next' to start a new game or 'exit' to quit")
+                # Reset state to start new game
+                state = None
+        else:
+            print("Unknown command")
 
 if __name__ == "__main__":
-    run_agent()
+    run_interactive()
